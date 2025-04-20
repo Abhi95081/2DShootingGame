@@ -5,7 +5,6 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
-import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
@@ -14,12 +13,12 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.delay
-import kotlin.math.abs
 import kotlin.math.sqrt
 import kotlin.random.Random
 
@@ -34,37 +33,44 @@ class MainActivity : ComponentActivity() {
 
 @Composable
 fun BubbleShooterGame() {
-    var gunPosition by remember { mutableStateOf(300f) }
+    val configuration = LocalConfiguration.current
+    val density = LocalDensity.current
+
+    // Use remember to keep the screen size consistent
+    val screenWidthPx by remember(configuration, density) {
+        mutableFloatStateOf(with(density) { configuration.screenWidthDp.dp.toPx() })
+    }
+    val screenHeightPx by remember(configuration, density) {
+        mutableFloatStateOf(with(density) { configuration.screenHeightDp.dp.toPx() })
+    }
+
     val bullets = remember { mutableStateListOf<Bullet>() }
     val enemies = remember { mutableStateListOf<Enemy>() }
     val explosions = remember { mutableStateListOf<Explosion>() }
 
-    var score by remember { mutableStateOf(0) }
-    var level by remember { mutableStateOf(1) }
+    var score by remember { mutableIntStateOf(0) }
+    var level by remember { mutableIntStateOf(1) }
     var gameOver by remember { mutableStateOf(false) }
 
     LaunchedEffect(gameOver) {
         while (!gameOver) {
             delay(16L) // ~60 FPS
 
-            // Spawn new enemies based on level
             if (Random.nextFloat() < (0.01f + 0.002f * level)) {
-                enemies.add(Enemy.createRandom(level))
+                enemies.add(Enemy.createRandom(screenWidthPx, level))
             }
 
-            // Update all bullets, enemies, explosions
             bullets.forEach { it.update() }
             enemies.forEach { it.update() }
             explosions.forEach { it.update() }
 
-            // Remove off-screen or finished objects
             bullets.removeAll { it.isOffScreen() }
-            enemies.removeAll { it.isOffScreen() }
+            enemies.removeAll { it.isOffScreen(screenHeightPx) }
             explosions.removeAll { it.isFinished() }
 
-            // Bullet hits
             val hitBullets = mutableListOf<Bullet>()
             val hitEnemies = mutableListOf<Enemy>()
+
             for (bullet in bullets) {
                 for (enemy in enemies) {
                     if (enemy.isHit(bullet.position)) {
@@ -82,12 +88,10 @@ fun BubbleShooterGame() {
             bullets.removeAll(hitBullets)
             enemies.removeAll(hitEnemies)
 
-            // Increase level every 100 points
             level = (score / 100) + 1
 
-            // Check game over (enemy collides gun)
             enemies.forEach { enemy ->
-                if (enemy.position.y >= 900f && abs(enemy.position.x - gunPosition) < 50f) {
+                if (enemy.position.y >= screenHeightPx) {
                     gameOver = true
                 }
             }
@@ -99,39 +103,25 @@ fun BubbleShooterGame() {
             .fillMaxSize()
             .background(Color.Black)
             .pointerInput(Unit) {
-                detectTapGestures {
+                detectTapGestures { offset ->
                     if (!gameOver) {
-                        bullets.add(Bullet(position = Offset(gunPosition, 880f)))
+                        bullets.add(Bullet(position = Offset(offset.x, screenHeightPx - 100f)))
                     }
-                }
-            }
-            .pointerInput(Unit) {
-                detectDragGestures { change, _ ->
-                    gunPosition = change.position.x.coerceIn(25f, 575f)
                 }
             }
     ) {
         Canvas(modifier = Modifier.fillMaxSize()) {
-            // Draw gun
-            drawGun(gunPosition)
-
-            // Draw bullets
             bullets.forEach { bullet ->
                 drawCircle(color = bullet.color, radius = 10f, center = bullet.position)
             }
-
-            // Draw enemies
             enemies.forEach { enemy ->
                 drawCircle(color = enemy.color, radius = enemy.radius, center = enemy.position)
             }
-
-            // Draw explosions
             explosions.forEach { explosion ->
                 drawCircle(color = explosion.color, radius = explosion.radius, center = explosion.position)
             }
         }
 
-        // UI elements
         Column(
             modifier = Modifier
                 .padding(16.dp)
@@ -158,7 +148,6 @@ fun BubbleShooterGame() {
                     Spacer(modifier = Modifier.height(24.dp))
                     Button(
                         onClick = {
-                            gunPosition = 300f
                             bullets.clear()
                             enemies.clear()
                             explosions.clear()
@@ -173,15 +162,6 @@ fun BubbleShooterGame() {
             }
         }
     }
-}
-
-// Drawing extensions
-fun DrawScope.drawGun(position: Float) {
-    drawRect(
-        color = Color.Gray,
-        topLeft = Offset(position - 25f, 900f),
-        size = androidx.compose.ui.geometry.Size(50f, 20f)
-    )
 }
 
 // Bullet class
@@ -208,35 +188,38 @@ data class Enemy(
     fun update() {
         position = position.copy(y = position.y + speed)
     }
-    fun isOffScreen() = position.y > 1000f
+
+    fun isOffScreen(screenHeightPx: Float) = position.y - radius > screenHeightPx
+
     fun isHit(bulletPos: Offset): Boolean {
         return (position - bulletPos).getDistance() < radius + 10f
     }
 
     companion object {
-        fun createRandom(level: Int): Enemy {
+        fun createRandom(screenWidthPx: Float, level: Int): Enemy {
+            val xPos = Random.nextFloat() * screenWidthPx
             return when (Random.nextInt(3)) {
                 0 -> Enemy(
-                    position = Offset(Random.nextFloat() * 600f, 0f),
+                    position = Offset(xPos, 0f),
                     health = 1,
-                    speed = 4f + level * 0.5f,
-                    radius = 40f,
+                    speed = 2f + level * 0.5f,
+                    radius = 30f,
                     color = Color.Red,
                     points = 10
                 )
                 1 -> Enemy(
-                    position = Offset(Random.nextFloat() * 600f, 0f),
+                    position = Offset(xPos, 0f),
                     health = 2,
-                    speed = 3f + level * 0.4f,
-                    radius = 45f,
+                    speed = 1.8f + level * 0.4f,
+                    radius = 35f,
                     color = Color.Magenta,
                     points = 20
                 )
                 else -> Enemy(
-                    position = Offset(Random.nextFloat() * 600f, 0f),
+                    position = Offset(xPos, 0f),
                     health = 3,
-                    speed = 2f + level * 0.3f,
-                    radius = 50f,
+                    speed = 1.5f + level * 0.3f,
+                    radius = 40f,
                     color = Color.Cyan,
                     points = 30
                 )
@@ -245,7 +228,7 @@ data class Enemy(
     }
 }
 
-// Explosion effect
+// Explosion class
 data class Explosion(
     var position: Offset,
     var radius: Float = 10f,
@@ -259,5 +242,5 @@ data class Explosion(
     fun isFinished() = life <= 0
 }
 
-// Helper
+// Helper function
 fun Offset.getDistance(): Float = sqrt(x * x + y * y)
